@@ -270,6 +270,14 @@ Notes:
 Security
 --------
 
+- **Host header**: Invoice Ninja builds links from the request's `Host`
+  (and Caddy's `:80` site answers any host): a password reset requested
+  with a forged `Host` mailed a valid reset link to that host (found
+  2026-09-25). A guard prepended to PHP-FPM's requests
+  (`config/php/host-guard.php`, `auto_prepend_file`) only accepts the hosts
+  of `NINJA_URL` and `NINJA_PORTAL_URL`, `NINJA_EXTRA_HOSTS` and loopback
+  names; other hosts get HTTP 400. With `SITE_ADDRESS` set to a domain or
+  behind Traefik, other hosts never reach PHP anyway.
 - No default secrets: compose fails if the required passwords and keys are
   missing. The development template uses public values; never use it on a
   server.

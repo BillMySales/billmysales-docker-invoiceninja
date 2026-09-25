@@ -32,6 +32,10 @@ x-ninja-env: &ninja-env
   APP_DEBUG: "false"
   APP_URL: ${NINJA_URL:?Set NINJA_URL in .env (e.g. https://billing.example.com)}
   APP_KEY: ${APP_KEY:?Set APP_KEY in .env (base64:... from openssl rand -base64 32)}
+  # Hosts the app answers to (config/php/host-guard.php): the ones of
+  # NINJA_URL and NINJA_PORTAL_URL, plus these (comma separated).
+  NINJA_PORTAL_URL: ${NINJA_PORTAL_URL:-}
+  NINJA_EXTRA_HOSTS: ${NINJA_EXTRA_HOSTS:-}
   REQUIRE_HTTPS: "false"
   # Only Caddy reaches PHP-FPM: trust its X-Forwarded-* headers.
   TRUSTED_PROXIES: "*"
@@ -121,7 +125,6 @@ services:
       NINJA_ADMIN_EMAIL: ${NINJA_ADMIN_EMAIL:?Set NINJA_ADMIN_EMAIL in .env}
       NINJA_ADMIN_PASSWORD: ${NINJA_ADMIN_PASSWORD:?Set NINJA_ADMIN_PASSWORD in .env}
       NINJA_COMPANY_NAME: ${NINJA_COMPANY_NAME:-}
-      NINJA_PORTAL_URL: ${NINJA_PORTAL_URL:-}
       NINJA_CURRENCY: ${NINJA_CURRENCY:-CLP}
       NINJA_COUNTRY: ${NINJA_COUNTRY:-CL}
       NINJA_LANGUAGE: ${NINJA_LANGUAGE:-es_ES}
@@ -147,7 +150,13 @@ services:
       <<: *ninja-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes: *ninja-volumes
+    volumes:
+      - public:/var/www/html/public
+      - storage:/var/www/html/storage
+      - ./scripts:/usr/local/share/stack/scripts:ro
+      # Only PHP-FPM (web requests): the guard rejects foreign Host headers.
+      - ./config/php/host-guard.ini:/usr/local/etc/php/conf.d/zz-host-guard.ini:ro
+      - ./config/php/host-guard.php:/usr/local/share/stack/host-guard.php:ro
     command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php-fpm", "-F"]
     healthcheck:
       test: ["CMD-SHELL", "REMOTE_ADDR=127.0.0.1 REQUEST_URI=/health REQUEST_METHOD=GET SCRIPT_FILENAME=/var/www/html/public/index.php cgi-fcgi -bind -connect 127.0.0.1:9000 | grep -q '\"status\":\"ok\"'"]
