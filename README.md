@@ -151,6 +151,11 @@ payment receipts, reminders, and notifications to the admin. Without
 `SMTP_HOST` emails are written to Laravel's log. The sender is `SMTP_FROM` /
 `SMTP_FROM_NAME`.
 
+Invoice Ninja validates email addresses by DNS: an address on a domain
+without mail records (such as `admin@example.com`) can't request a password
+reset. Tests need an address on a real domain (Mailpit still catches the
+mail in development).
+
 Integrations (API and webhooks)
 -------------------------------
 
@@ -190,7 +195,8 @@ and `<timestamp>-files.tar.gz` (storage) to the `backups` volume (or
 `./data/backups` with `overrides/local-dirs.yaml`) at start and then every
 `BACKUP_INTERVAL_HOURS`, and deletes files older than `BACKUP_KEEP_DAYS`.
 Files are readable by their owner only. `APP_KEY` is in `.env`, not in the
-backups: keep it.
+backups: keep it. The dump uses `mysqldump --no-tablespaces` (the database
+user has no `PROCESS` privilege).
 
 ```shell
 docker compose run --rm --no-deps backup now                  # back up now
@@ -262,7 +268,9 @@ Notes:
   public `https://` address. Invoice Ninja records the client IP from
   `Cf-Connecting-Ip` or else `X-Forwarded-For` as is: Caddy removes the
   first and sends only the real client IP in the second (it would otherwise
-  be the whole, forgeable chain). It also drops a client's
+  be the whole, forgeable chain); those `header_up` lines must be inside
+  `php_fastcgi` (outside it, the peer's address was still appended). It
+  also drops a client's
   `X-Forwarded-Port` (Laravel trusts it, and Caddy doesn't reset it).
 - From inside the containers, the host machine is reachable as
   `host.docker.internal` (not usable for webhooks, see above).
