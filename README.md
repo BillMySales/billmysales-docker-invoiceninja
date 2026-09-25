@@ -262,7 +262,8 @@ Notes:
   public `https://` address. Invoice Ninja records the client IP from
   `Cf-Connecting-Ip` or else `X-Forwarded-For` as is: Caddy removes the
   first and sends only the real client IP in the second (it would otherwise
-  be the whole, forgeable chain).
+  be the whole, forgeable chain). It also drops a client's
+  `X-Forwarded-Port` (Laravel trusts it, and Caddy doesn't reset it).
 - From inside the containers, the host machine is reachable as
   `host.docker.internal` (not usable for webhooks, see above).
 
