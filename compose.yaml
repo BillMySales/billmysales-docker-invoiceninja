@@ -1,0 +1,316 @@
+# Invoice Ninja stack: Caddy (TLS, static files) + Invoice Ninja (official
+# Debian image: PHP-FPM, queue worker and scheduler as separate services) +
+# MySQL + Redis, with a setup job and optional backups and Mailpit.
+#
+# Quick start (development):
+#   cp .env.dev.example .env
+#   docker compose up -d
+#   docker compose logs -f setup   # wait for "==> Done"
+#
+# Production: start from .env.prod.example instead. See README.md.
+#
+# Required variables have no default: compose refuses to start without them.
+
+name: ${COMPOSE_PROJECT_NAME:-invoiceninja}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILE:-3}"
+
+# The Invoice Ninja image, shared by setup, app, worker, scheduler and
+# console. Its entrypoint (init.sh) sets the Chromium path for PDFs and only
+# initializes the app when the command is its supervisord, which the stack
+# replaces with one process per service.
+x-ninja: &ninja
+  image: invoiceninja/invoiceninja-debian:${NINJA_VERSION:-5.13.43}
+  logging: *logging
+
+x-ninja-env: &ninja-env
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_URL: ${NINJA_URL:?Set NINJA_URL in .env (e.g. https://billing.example.com)}
+  APP_KEY: ${APP_KEY:?Set APP_KEY in .env (base64:... from openssl rand -base64 32)}
+  REQUIRE_HTTPS: "false"
+  # Only Caddy reaches PHP-FPM: trust its X-Forwarded-* headers.
+  TRUSTED_PROXIES: "*"
+  IS_DOCKER: "true"
+  PDF_GENERATOR: snappdf
+  FILESYSTEM_DISK: debian_docker
+  DB_CONNECTION: mysql
+  DB_HOST: db
+  DB_PORT: 3306
+  DB_DATABASE: ${DB_NAME:-ninja}
+  DB_USERNAME: ${DB_USER:-ninja}
+  DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+  CACHE_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: redis
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: "null"
+  SCOUT_DRIVER: "null"
+  MAIL_FROM_ADDRESS: ${SMTP_FROM:-noreply@example.com}
+  MAIL_FROM_NAME: ${SMTP_FROM_NAME:-Invoice Ninja}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SECURE: ${SMTP_SECURE:-tls}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  TZ: ${TIMEZONE:-America/Santiago}
+
+x-ninja-volumes: &ninja-volumes
+  - public:/var/www/html/public
+  - storage:/var/www/html/storage
+  - ./scripts:/usr/local/share/stack/scripts:ro
+
+services:
+  db:
+    image: mysql:${MYSQL_VERSION:-8.4}
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-ninja}
+      MYSQL_USER: ${DB_USER:-ninja}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-1g}
+
+  redis:
+    image: redis:${REDIS_VERSION:-7.4}-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-256m}
+
+  # One-shot job: public files, migrations, first account and company
+  # settings. Safe to repeat; runs on every `up`.
+  setup:
+    <<: *ninja
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *ninja-env
+      NINJA_VERSION: ${NINJA_VERSION:-5.13.43}
+      NINJA_ADMIN_EMAIL: ${NINJA_ADMIN_EMAIL:?Set NINJA_ADMIN_EMAIL in .env}
+      NINJA_ADMIN_PASSWORD: ${NINJA_ADMIN_PASSWORD:?Set NINJA_ADMIN_PASSWORD in .env}
+      NINJA_COMPANY_NAME: ${NINJA_COMPANY_NAME:-}
+      NINJA_PORTAL_URL: ${NINJA_PORTAL_URL:-}
+      NINJA_CURRENCY: ${NINJA_CURRENCY:-CLP}
+      NINJA_COUNTRY: ${NINJA_COUNTRY:-CL}
+      NINJA_LANGUAGE: ${NINJA_LANGUAGE:-es_ES}
+      NINJA_PRICES_INCLUDE_TAX: ${NINJA_PRICES_INCLUDE_TAX:-false}
+      NINJA_DATE_FORMAT: ${NINJA_DATE_FORMAT:-d/m/Y}
+      NINJA_TAX_RATE: ${NINJA_TAX_RATE-19}
+      NINJA_TAX_NAME: ${NINJA_TAX_NAME:-IVA}
+    volumes: *ninja-volumes
+    entrypoint: ["sh", "/usr/local/share/stack/scripts/setup.sh"]
+    deploy:
+      resources:
+        limits:
+          memory: ${SETUP_MEMORY_LIMIT:-1g}
+
+  # PHP-FPM (internal port 9000): the app, the client portal and the API.
+  app:
+    <<: *ninja
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *ninja-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: *ninja-volumes
+    command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php-fpm", "-F"]
+    healthcheck:
+      test: ["CMD-SHELL", "REMOTE_ADDR=127.0.0.1 REQUEST_URI=/health REQUEST_METHOD=GET SCRIPT_FILENAME=/var/www/html/public/index.php cgi-fcgi -bind -connect 127.0.0.1:9000 | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORY_LIMIT:-1g}
+
+  # Queue worker: emails, PDFs, webhooks, recurring invoices.
+  worker:
+    <<: *ninja
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *ninja-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: *ninja-volumes
+    user: www-data
+    command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q queue:work /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-1g}
+
+  # Laravel scheduler: recurring invoices, reminders, exchange rates.
+  scheduler:
+    <<: *ninja
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *ninja-env
+    volumes: *ninja-volumes
+    user: www-data
+    command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan", "schedule:work"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q schedule:work /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${SCHEDULER_MEMORY_LIMIT:-512m}
+
+  caddy:
+    image: caddy:${CADDY_VERSION:-2.11}-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      UPLOAD_MAX_SIZE: ${UPLOAD_MAX_SIZE:-32M}
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Same paths as in the app (public/storage is a symlink into storage).
+      - public:/var/www/html/public:ro
+      - storage:/var/www/html/storage:ro
+      # TLS certificates and keys (keep them: ACME rate limits).
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-256m}
+
+  # Artisan (profile "tools"), e.g.:
+  #   docker compose run --rm console ninja:check-data
+  console:
+    <<: *ninja
+    profiles: ["tools"]
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *ninja-env
+    volumes: *ninja-volumes
+    user: www-data
+    entrypoint: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan"]
+    command: ["list", "ninja"]
+    deploy:
+      resources:
+        limits:
+          memory: ${CONSOLE_MEMORY_LIMIT:-1g}
+
+  # Optional (profile "backup"): database dump + storage every
+  # BACKUP_INTERVAL_HOURS, kept BACKUP_KEEP_DAYS days in the `backups` volume
+  # (overrides/local-dirs.yaml puts them in a local directory instead).
+  backup:
+    image: mysql:${MYSQL_VERSION:-8.4}
+    profiles: ["backup"]
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-ninja}
+      DB_USER: ${DB_USER:-ninja}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      # Read-write so `backup.sh restore` can put it back.
+      - storage:/data/storage
+      - backups:/backups
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/backup.sh"]
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/backup.sh", "health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKUP_MEMORY_LIMIT:-512m}
+
+  # Optional (profile "mailpit", development): catches all outgoing mail.
+  # Set SMTP_HOST=mailpit and SMTP_PORT=1025; web UI on MAILPIT_PORT.
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:-v1.31}
+    profiles: ["mailpit"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+
+volumes:
+  db_data:
+  redis_data:
+  public:
+  storage:
+  caddy_data:
+  caddy_config:
+  backups:
