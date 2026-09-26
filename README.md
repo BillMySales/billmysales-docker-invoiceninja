@@ -59,8 +59,9 @@ Production
 
 ```shell
 cp .env.prod.example .env
-# Fill in NINJA_URL, SITE_ADDRESS, APP_KEY, DB_PASSWORD, DB_ROOT_PASSWORD,
-# NINJA_ADMIN_EMAIL, NINJA_ADMIN_PASSWORD and the SMTP_* values.
+# Required: NINJA_URL, SITE_ADDRESS, APP_KEY, DB_PASSWORD, DB_ROOT_PASSWORD,
+# NINJA_ADMIN_EMAIL, NINJA_ADMIN_PASSWORD.
+# Recommended: the SMTP_* values (without SMTP_HOST no emails are sent).
 docker compose up -d
 ```
 
@@ -110,9 +111,10 @@ Laravel's config and routes from its environment when it starts
     `NINJA_URL`) in the companies' `portal_domain`, which links in emails
     use (Invoice Ninja stores the URL of the install there);
   - once, while the company still has `ninja:create-account`'s defaults:
-    company name, CLP, Chile, Spanish (`es_ES`), America/Santiago, `d/m/Y`
-    dates, 24-hour time, and an IVA 19% tax rate as the default tax of new
-    invoices. Later changes in the app are kept.
+    company name, CLP, Chile, Spanish (`es_ES`), the time zone
+    (`TIMEZONE`, America/Santiago), `d/m/Y` dates, 24-hour time, and an IVA
+    19% tax rate as the default tax of new invoices. Later changes in the
+    app are kept.
 
 Common commands
 ---------------
@@ -247,7 +249,9 @@ Configuration
 Every variable is documented in `.env.prod.example`. Main groups:
 
 - **Site and network**: `NINJA_URL`, `NINJA_PORTAL_URL`, `SITE_ADDRESS`,
-  `HTTP_BIND`, `HTTP_PORT`, `HTTPS_PORT`, `TIMEZONE`.
+  `HTTP_BIND`, `HTTP_PORT`, `HTTPS_PORT`, `TIMEZONE` (the company's time
+  zone on the first install; the containers' `TZ` on every start, of little
+  effect: Laravel works in `SERVER_TIMEZONE`, UTC by default).
 - **Credentials**: `APP_KEY`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`,
   `NINJA_ADMIN_EMAIL`, `NINJA_ADMIN_PASSWORD` (required).
 - **Company** (first install only): `NINJA_COMPANY_NAME`, `NINJA_CURRENCY`,
