@@ -69,6 +69,13 @@ x-ninja-volumes: &ninja-volumes
   - storage:/var/www/html/storage
   - ./scripts:/usr/local/share/stack/scripts:ro
 
+# Lets Invoice Ninja reach services on the host (e.g. an app running locally) at
+# http://host.docker.internal:<port>, also on Linux. Every container that
+# runs Invoice Ninja's code: its web process, setup, cron, workers, the console
+# (Docker Desktop resolves it anyway).
+x-host-access: &host-access
+  - "host.docker.internal:host-gateway"
+
 services:
   db:
     image: mysql:${MYSQL_VERSION:-8.4}
@@ -132,6 +139,7 @@ services:
       NINJA_DATE_FORMAT: ${NINJA_DATE_FORMAT:-d/m/Y}
       NINJA_TAX_RATE: ${NINJA_TAX_RATE-19}
       NINJA_TAX_NAME: ${NINJA_TAX_NAME:-IVA}
+    extra_hosts: *host-access
     volumes: *ninja-volumes
     entrypoint: ["sh", "/usr/local/share/stack/scripts/setup.sh"]
     deploy:
@@ -148,8 +156,7 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *ninja-env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    extra_hosts: *host-access
     volumes:
       - public:/var/www/html/public
       - storage:/var/www/html/storage
@@ -178,8 +185,7 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *ninja-env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    extra_hosts: *host-access
     volumes: *ninja-volumes
     user: www-data
     command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
@@ -202,6 +208,7 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *ninja-env
+    extra_hosts: *host-access
     volumes: *ninja-volumes
     user: www-data
     command: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan", "schedule:work"]
@@ -258,6 +265,7 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *ninja-env
+    extra_hosts: *host-access
     volumes: *ninja-volumes
     user: www-data
     entrypoint: ["sh", "/usr/local/share/stack/scripts/run.sh", "php", "artisan"]
