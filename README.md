@@ -284,8 +284,7 @@ Security
 
 - **Host header**: Invoice Ninja builds links from the request's `Host`
   (and Caddy's `:80` site answers any host): a password reset requested
-  with a forged `Host` mailed a valid reset link to that host (found
-  2026-09-25). A guard prepended to PHP-FPM's requests
+  with a forged `Host` mails a valid reset link to that host. A guard prepended to PHP-FPM's requests
   (`config/php/host-guard.php`, `auto_prepend_file`) only accepts the hosts
   of `NINJA_URL` and `NINJA_PORTAL_URL`, `NINJA_EXTRA_HOSTS` and loopback
   names; other hosts get HTTP 400. With `SITE_ADDRESS` set to a domain or
@@ -302,7 +301,7 @@ Security
 Validation
 ----------
 
-What was checked for this stack (2026-09-25):
+What was checked for this stack:
 
 - Clean start (`down -v` + `up -d`, images pulled) in about 45 s: every
   service `healthy`, `setup` `Exited (0)`; a second run makes no changes.
